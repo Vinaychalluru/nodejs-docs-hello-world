@@ -6,11 +6,11 @@
             \/_____/   \/_____/     \/_/   \/_/\/_/   \/_/     \/_/
 
 
-This is a sample Slack bot built with Botkit.
+This is a sample Facebook bot built with Botkit.
 
 This bot demonstrates many of the core features of Botkit:
 
-* Connect to Slack using the real time API
+* Connect to Facebook's Messenger APIs
 * Receive messages based on "spoken" patterns
 * Reply to messages
 * Use the conversation system to ask questions
@@ -19,17 +19,19 @@ This bot demonstrates many of the core features of Botkit:
 
 # RUN THE BOT:
 
-  Get a Bot token from Slack:
+  Follow the instructions here to set up your Facebook app and page:
 
-    -> http://my.slack.com/services/new/bot
+    -> https://developers.facebook.com/docs/messenger-platform/implementation
 
   Run your bot from the command line:
 
-    token=<MY TOKEN> node slack_bot.js
+    app_secret=<MY APP SECRET> page_token=<MY PAGE TOKEN> verify_token=<MY_VERIFY_TOKEN> node facebook_bot.js [--lt [--ltsubdomain LOCALTUNNEL_SUBDOMAIN]]
+
+  Use the --lt option to make your bot available on the web through localtunnel.me.
 
 # USE THE BOT:
 
-  Find your bot inside Slack to send it a direct message.
+  Find your bot inside Facebook to send it a direct message.
 
   Say: "Hello"
 
@@ -37,7 +39,7 @@ This bot demonstrates many of the core features of Botkit:
 
   Say: "who are you?"
 
-  The bot will tell you its name, where it is running, and for how long.
+  The bot will tell you its name, where it running, and for how long.
 
   Say: "Call me <nickname>"
 
@@ -62,6 +64,7 @@ This bot demonstrates many of the core features of Botkit:
     -> http://howdy.ai/botkit
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+
 var http = require('http');
 
 var server = http.createServer(function(request, response) {
@@ -76,522 +79,442 @@ server.listen(port);
 
 console.log("Server running at http://localhost:%d", port);
 
-if (!process.env.token) {
-    console.log('Error: Specify token in environment');
+if (!process.env.page_token) {
+    console.log('Error: Specify page_token in environment');
+    process.exit(1);
+}
+
+if (!process.env.verify_token) {
+    console.log('Error: Specify verify_token in environment');
+    process.exit(1);
+}
+
+if (!process.env.app_secret) {
+    console.log('Error: Specify app_secret in environment');
     process.exit(1);
 }
 
 var Botkit = require('../lib/Botkit.js');
 var os = require('os');
-var temp = 0;
+var commandLineArgs = require('command-line-args');
+var localtunnel = require('localtunnel');
 
-var path, node_ssh, ssh, fs, exec, shell
+const ops = commandLineArgs([
+      {name: 'lt', alias: 'l', args: 1, description: 'Use localtunnel.me to make your bot available on the web.',
+      type: Boolean, defaultValue: false},
+      {name: 'ltsubdomain', alias: 's', args: 1,
+      description: 'Custom subdomain for the localtunnel.me URL. This option can only be used together with --lt.',
+      type: String, defaultValue: null},
+   ]);
 
-fs = require('fs')
-sys = require('sys')
-path = require('path')
-exec = require('ssh-exec')
-shell = require('shelljs')
-log_fs = require('fs');
-
-
-function writeLog(log_msg) {
-    log_fs.appendFile('robot_log.txt', log_msg, function (err) {
-        if (err) throw err;
-        console.log('Saved!');
-    });
+if(ops.lt === false && ops.ltsubdomain !== null) {
+    console.log("error: --ltsubdomain can only be used together with --lt.");
+    process.exit();
 }
 
-function addDc(dcNbr) {
-    fs.appendFile('dcList.txt', dcNbr, function (err) {
-        if (err) throw err;
-        console.log('***********************************************************Saved!' + dcNbr);
-    });
-}
-
-
-var controller = Botkit.slackbot({
+var controller = Botkit.facebookbot({
     debug: true,
+    log: true,
+    access_token: process.env.page_token,
+    verify_token: process.env.verify_token,
+    app_secret: process.env.app_secret,
+    validate_requests: true, // Refuse any requests that don't come from FB on your receive webhook, must provide FB_APP_SECRET in environment variables
 });
 
 var bot = controller.spawn({
-    token: process.env.token
-}).startRTM();
-
-var keyParamDict = {
-    'date': {
-        'p_count': '3',
-        'multi_ind': 'n'
-    },
-    'version': {
-        'p_count': '3',
-        'multi_ind': 'n'
-    },
-    'dflt_path': {
-        'p_count': '3',
-        'multi_ind': 'n'
-    },
-    'po': {
-        'p_count': '4',
-        'multi_ind': 'n'
-    },
-    'order': {
-        'p_count': '4',
-        'multi_ind': 'n'
-    },
-    'mq': {
-        'p_count': '4',
-        'multi_ind': 'n'
-    },
-    'delivery': {
-        'p_count': '4',
-        'multi_ind': 'n'
-    },
-    'dd_rpt': {
-        'p_count': '3',
-        'multi_ind': 'n'
-    },
-    'psg': {
-        'p_count': '4',
-        'multi_ind': 'y'
-    },
-    'eod': {
-        'p_count': '3',
-        'multi_ind': 'n'
-    },
-    'item': {
-        'p_count': '4',
-        'multi_ind': 'n'
-    }
-
-};
-
-
-controller.hears(['date', 'version', 'po', 'DFLT_PATH', 'order', 'DD_RPT', 'PSG', 'MQ', 'delivery', 'item', 'eod'], 'direct_message,direct_mention,mention', function (bot, message) {
-
-    var fp = fs.createWriteStream("shellOutput.txt");
-    var inpCmd = message.text;
-    res = inpCmd.split(' ')
-    var validFlag = true;
-    var warnmsg = "";
-    var formatFlag = false;
-    var adddcFlag = false;
-    var fsNew = require('fs');
-    keyword = res[0].toLowerCase();
-
-
-    if (res.length < 3) {
-        bot.reply(message, {
-            "attachments": [
-                {
-                    "color": "#36a64f",
-                    "text": "\nEnter your request in this format : \n *" + keyword + " <DC NUMBER> <COUNTRY CODE> <PARAMS(OPTIONAL)>* "
-                }
-            ]
-        });
-        formatFlag = true
-        validFlag = false
-    }
-    else {
-        var re = /^[1-9][0-9]{3}$/
-        if (res[1].search(re) !== 0) {
-            warnmsg = "Maybe you want to re check the entered DC Number : " + res[1] + "\n";
-            validFlag = false
-        }
-
-        var re2 = /us|cl|br|mx|cn|cr|jp|uk|ca|ni|hn|gt|ar/i
-        if (res[2].search(re2) !== 0) {
-            warnmsg = warnmsg + 'I have not heard of the country : ' + res[2] + "\n";
-            validFlag = false
-        }
-
-        var re3 = res[1] + res[2].toUpperCase();;
-
-        var dcTxt = fsNew.readFileSync("dcList.txt").toString('utf-8');
-        var result = dcTxt.match(re3)
-        if (result == null && validFlag == true) {
-            warnmsg = warnmsg + 'You are not allowed to connect to Production Dcs : ' + res[1] + " " + res[2] + "\n";
-            validFlag = false
-            adddcFlag = true;
-        }
-
-        if ((res.length == keyParamDict[keyword].p_count) || (res.length >= keyParamDict[keyword].p_count && keyParamDict[keyword].multi_ind == 'y')) {
-            console.log('Pass')
-        }
-        else {
-            warnmsg = warnmsg + 'Please check the no of parameters you have passed for ' + keyword + "\n";
-            validFlag = false
-        }
-    }
-
-    if (validFlag) {
-        var currentUser;
-        bot.api.users.info({ user: message.user }, function (err, response) {
-            if (err) {
-                console.log("ERROR :");
-            }
-            else {
-                user = response["user"].real_name;
-                text1 = " Hang On " + user.split(' ')[0] + " I'm fetching your results !!! ";
-                bot.reply(message, { "text": "```" + text1 + "```" });
-                writeLog(log_ts + "|" + user + "|" + inpCmd + "\n");
-            }
-        });
-        var d = new Date();
-        var log_ts = d.toJSON();
-
-        exec('sh /u/applic/gls/RoBot/master.sh ' + inpCmd, {
-            user: 'gls',
-            host: 'us32856s1007d0a.s32856.us.wal-mart.com',
-            port: '22',
-            key: 'C:/BotKit/botkit-master/id_rsa',
-            password: 'l4virus'
-        }).pipe(fp)
-            .on('finish', function () {
-                var fsNew = require('fs');
-                var text = fsNew.readFileSync("shellOutput.txt").toString('utf-8');
-                console.log("DC ***********************" + text);
-                shresult = text;
-                len = text.length;
-                console.log("DC ***********************" + shresult);
-                if (len > 1) {
-                    bot.reply(message, { "text": "*@" + user + " Your requested results for " + res[1] + " " + res[2] + " :*\n```" + text + "```" });
-                }
-                else {
-                    text = " Your request is executed , but I don't have any data to show !!! ";
-                    bot.reply(message, { "text": "```" + text + "```" });
-                }
-            });
-    }
-    else {
-        if (formatFlag == false) {
-            if (adddcFlag) {
-                bot.reply(message, { "text": "```" + warnmsg + "\nIf its a Pre-Production DC , Reach to Admin to add the DC to the list```" });
-            }
-            else {
-                bot.reply(message, { "text": "```" + warnmsg + "\nYou may type 'help' to know what I can do```" });
-            }
-        }
-    }
 });
 
+controller.setupWebserver(process.env.port || 3000, function(err, webserver) {
+    controller.createWebhookEndpoints(webserver, bot, function() {
+        console.log('ONLINE!');
+        if(ops.lt) {
+            var tunnel = localtunnel(process.env.port || 3000, {subdomain: ops.ltsubdomain}, function(err, tunnel) {
+                if (err) {
+                    console.log(err);
+                    process.exit();
+                }
+                console.log("Your bot is available on the web at the following URL: " + tunnel.url + '/facebook/receive');
+            });
 
-controller.hears(['color_button'], 'direct_message,direct_mention,mention', function (bot, message) {
-    bot.reply(message, {
-        "attachments": [
-            {
-                "color": "#759025",
-                "text": "Choose a Color : ",
-                "callback_id": "color_button",
-                "attachment_type": "default",
-                "title": "What color interests you ?",
-                "actions": [
-                    {
-                        "name": "color",
-                        "text": "Red",
-                        "type": "button",
-                        "value": "red"
-                    },
-                    {
-                        "name": "color",
-                        "text": "Green",
-                        "type": "button",
-                        "value": "green",
-                        "confirm": {
-                                "title": "Are you sure?",
-                                "text": "Wouldn't you prefer a red color?",
-                                "ok_text": "Yes",
-                                "dismiss_text": "No"
-                            }
-                    }
-                ]
-            }
-        ]
+            tunnel.on('close', function() {
+                console.log("Your bot is no longer available on the web at the localtunnnel.me URL.");
+                process.exit();
+            });
+        }
     });
 });
 
-controller.hears(['game_button'], 'direct_message,direct_mention,mention', function (bot, message) {
-    bot.reply(message,
+
+controller.hears(['attachment_upload'], 'message_received', function(bot, message) {
+    var attachment = {
+        "type":"image",
+        "payload":{
+            "url":"https://pbs.twimg.com/profile_images/803642201653858305/IAW1DBPw_400x400.png",
+            "is_reusable": true
+        }
+    };
+
+    controller.api.attachment_upload.upload(attachment, function (err, attachmentId) {
+        if(err) {
+            // Error
+        } else {
+            var image = {
+                "attachment":{
+                    "type":"image",
+                    "payload": {
+                        "attachment_id": attachmentId
+                    }
+                }
+            };
+            bot.reply(message, image);
+        }
+    });
+});
+
+
+controller.api.nlp.enable();
+controller.api.messenger_profile.greeting('Hello! I\'m a Botkit bot!');
+controller.api.messenger_profile.get_started('sample_get_started_payload');
+controller.api.messenger_profile.menu([{
+    "locale":"default",
+    "composer_input_disabled":true,
+    "call_to_actions":[
         {
-            "text": "Would you like to play a game?"    ,
-            "attachments": [
+            "title":"My Skills",
+            "type":"nested",
+            "call_to_actions":[
                 {
-                    "text": "Choose a game to play",
-                    "fallback": "You are unable to choose a game",
-                    "callback_id": "wopr_game",
-                    "color": "#3AA3E3",
-                    "attachment_type": "default",
-                    "actions": [
+                    "title":"Hello",
+                    "type":"postback",
+                    "payload":"Hello"
+                },
+                {
+                    "title":"Hi",
+                    "type":"postback",
+                    "payload":"Hi"
+                }
+            ]
+        },
+        {
+            "type":"web_url",
+            "title":"Botkit Docs",
+            "url":"https://github.com/howdyai/botkit/blob/master/readme-facebook.md",
+            "webview_height_ratio":"full"
+        }
+    ]
+},
+    {
+        "locale":"zh_CN",
+        "composer_input_disabled":false
+    }
+]);
+
+// controller.api.messenger_profile.account_linking('https://www.yourAwesomSite.com/oauth?response_type=code&client_id=1234567890&scope=basic');
+// controller.api.messenger_profile.get_account_linking(function (err, accountLinkingUrl)  {
+//     console.log('****** Account linkink URL :', accountLinkingUrl);
+// });
+// controller.api.messenger_profile.delete_account_linking();
+// controller.api.messenger_profile.domain_whitelist('https://localhost');
+// controller.api.messenger_profile.domain_whitelist(['https://127.0.0.1', 'https://0.0.0.0']);
+// controller.api.messenger_profile.delete_domain_whitelist('https://localhost');
+// controller.api.messenger_profile.delete_domain_whitelist(['https://127.0.0.1', 'https://0.0.0.0']);
+// controller.api.messenger_profile.get_domain_whitelist(function (err, data)  {
+//     console.log('****** Whitelisted domains :', data);
+// });
+
+
+// returns the bot's messenger code image
+controller.hears(['code'], 'message_received,facebook_postback', function(bot, message) {
+    controller.api.messenger_profile.get_messenger_code(2000, function (err, url) {
+        if(err) {
+            // Error
+        } else {
+            var image = {
+                "attachment":{
+                    "type":"image",
+                    "payload":{
+                        "url": url
+                    }
+                }
+            };
+            bot.reply(message, image);
+        }
+    });
+});
+
+controller.hears(['quick'], 'message_received', function(bot, message) {
+
+    bot.reply(message, {
+        text: 'Hey! This message has some quick replies attached.',
+        quick_replies: [
+            {
+                "content_type": "text",
+                "title": "Yes",
+                "payload": "yes",
+            },
+            {
+                "content_type": "text",
+                "title": "No",
+                "payload": "no",
+            }
+        ]
+    });
+
+});
+
+controller.hears(['^hello', '^hi'], 'message_received,facebook_postback', function(bot, message) {
+    controller.storage.users.get(message.user, function(err, user) {
+        if (user && user.name) {
+            bot.reply(message, 'Hello ' + user.name + '!!');
+        } else {
+            bot.reply(message, 'Hello.');
+        }
+    });
+});
+
+controller.hears(['silent push reply'], 'message_received', function(bot, message) {
+    reply_message = {
+        text: "This message will have a push notification on a mobile phone, but no sound notification",
+        notification_type: "SILENT_PUSH"
+    }
+    bot.reply(message, reply_message)
+})
+
+controller.hears(['no push'], 'message_received', function(bot, message) {
+    reply_message = {
+        text: "This message will not have any push notification on a mobile phone",
+        notification_type: "NO_PUSH"
+    }
+    bot.reply(message, reply_message)
+})
+
+controller.hears(['structured'], 'message_received', function(bot, message) {
+
+    bot.startConversation(message, function(err, convo) {
+        convo.ask({
+            attachment: {
+                'type': 'template',
+                'payload': {
+                    'template_type': 'generic',
+                    'elements': [
                         {
-                            "name": "game",
-                            "text": "Chess",
-                            "type": "button",
-                            "value": "chess"
+                            'title': 'Classic White T-Shirt',
+                            'image_url': 'http://petersapparel.parseapp.com/img/item100-thumb.png',
+                            'subtitle': 'Soft white cotton t-shirt is back in style',
+                            'buttons': [
+                                {
+                                    'type': 'web_url',
+                                    'url': 'https://petersapparel.parseapp.com/view_item?item_id=100',
+                                    'title': 'View Item'
+                                },
+                                {
+                                    'type': 'web_url',
+                                    'url': 'https://petersapparel.parseapp.com/buy_item?item_id=100',
+                                    'title': 'Buy Item'
+                                },
+                                {
+                                    'type': 'postback',
+                                    'title': 'Bookmark Item',
+                                    'payload': 'White T-Shirt'
+                                }
+                            ]
                         },
                         {
-                            "name": "game",
-                            "text": "Falken's Maze",
-                            "type": "button",
-                            "value": "maze"
-                        },
-                        {
-                            "name": "game",
-                            "text": "Thermonuclear War",
-                            "style": "danger",
-                            "type": "button",
-                            "value": "war",
-                            "confirm": {
-                                "title": "Are you sure?",
-                                "text": "Wouldn't you prefer a good game of chess?",
-                                "ok_text": "Yes",
-                                "dismiss_text": "No"
-                            }
+                            'title': 'Classic Grey T-Shirt',
+                            'image_url': 'http://petersapparel.parseapp.com/img/item101-thumb.png',
+                            'subtitle': 'Soft gray cotton t-shirt is back in style',
+                            'buttons': [
+                                {
+                                    'type': 'web_url',
+                                    'url': 'https://petersapparel.parseapp.com/view_item?item_id=101',
+                                    'title': 'View Item'
+                                },
+                                {
+                                    'type': 'web_url',
+                                    'url': 'https://petersapparel.parseapp.com/buy_item?item_id=101',
+                                    'title': 'Buy Item'
+                                },
+                                {
+                                    'type': 'postback',
+                                    'title': 'Bookmark Item',
+                                    'payload': 'Grey T-Shirt'
+                                }
+                            ]
                         }
                     ]
                 }
-            ]
-        });
-});
-
-
-controller.hears(['help', 'what can you do'], 'direct_message,direct_mention,mention', function (bot, message) {
-    bot.reply(message, {
-        "attachments": [
-            {
-                "color": "#36a64f",
-                "text": "*DATE*               Get the current date \n *VERSION*        Get the GLS Version \n *DFLT_PATH*    Get the Default Share Path \n *PO*                   Check if the POs loaded in GLS \n *ORDER*           Check if the Customer Order is loaded in GLS \n *MQ*                  Validate MQ for a particular DC. You need to pass the user id as parameter to get the email \n *DELIVERY*      Check if a particular delivery is available in GLS \n *DD_RPT*         Get the DD reports for a particular DC \n *PSG*                 Get the process details \n *ITEM*               Check if the item is available \n *EOD*                Get the end of the day data \n\nEnter your request in this format : \n *<KEYWORD> <DC NUMBER> <COUNTRY CODE> <PARAMS(OPTIONAL)>* \nEx : PO 32856 US 0022736000,0022736070 ",
-                "title": "KEYWORD     WHAT IT DOES "
             }
-        ]
+        }, function(response, convo) {
+            // whoa, I got the postback payload as a response to my convo.ask!
+            convo.next();
+        });
     });
 });
 
-controller.hears(['printer'], 'direct_message,direct_mention,mention', function (bot, message) {
+controller.on('facebook_postback', function(bot, message) {
+    // console.log(bot, message);
+   bot.reply(message, 'Great Choice!!!! (' + message.payload + ')');
 
-    bot.startConversation(message, function (err, convo) {
+});
 
-        convo.ask('Do you have issue with existing/New Printer?', [
-            {
-                pattern: bot.utterances.yes,
-                callback: function (response, convo) {
-                    convo.say('Please share the below details!');
-                    convo.ask('Printer Name/Nbr ?', function (response, convo) {
-                        convo.next();
-                    }, { 'key': 'name' }); // store the results in a field called name
-                    convo.ask('Printer IP ?', function (response, convo) {
-                        convo.next();
-                    }, { 'key': 'ip' }); // store the results in a field called ip
-                    convo.ask('Printer MAC Address ?', function (response, convo) {
-                        convo.next();
-                    }, { 'key': 'mac' }); // store the results in a field called mac
-                    convo.on('end', function (convo) {
 
+controller.hears(['call me (.*)', 'my name is (.*)'], 'message_received', function(bot, message) {
+    var name = message.match[1];
+    controller.storage.users.get(message.user, function(err, user) {
+        if (!user) {
+            user = {
+                id: message.user,
+            };
+        }
+        user.name = name;
+        controller.storage.users.save(user, function(err, id) {
+            bot.reply(message, 'Got it. I will call you ' + user.name + ' from now on.');
+        });
+    });
+});
+
+controller.hears(['what is my name', 'who am i'], 'message_received', function(bot, message) {
+    controller.storage.users.get(message.user, function(err, user) {
+        if (user && user.name) {
+            bot.reply(message, 'Your name is ' + user.name);
+        } else {
+            bot.startConversation(message, function(err, convo) {
+                if (!err) {
+                    convo.say('I do not know your name yet!');
+                    convo.ask('What should I call you?', function(response, convo) {
+                        convo.ask('You want me to call you `' + response.text + '`?', [
+                            {
+                                pattern: 'yes',
+                                callback: function(response, convo) {
+                                    // since no further messages are queued after this,
+                                    // the conversation will end naturally with status == 'completed'
+                                    convo.next();
+                                }
+                            },
+                            {
+                                pattern: 'no',
+                                callback: function(response, convo) {
+                                    // stop the conversation. this will cause it to end with status == 'stopped'
+                                    convo.stop();
+                                }
+                            },
+                            {
+                                default: true,
+                                callback: function(response, convo) {
+                                    convo.repeat();
+                                    convo.next();
+                                }
+                            }
+                        ]);
+
+                        convo.next();
+
+                    }, {'key': 'nickname'}); // store the results in a field called nickname
+
+                    convo.on('end', function(convo) {
                         if (convo.status == 'completed') {
-                            controller.storage.users.get(message.user, function (err, user) {
+                            bot.reply(message, 'OK! I will update my dossier...');
+
+                            controller.storage.users.get(message.user, function(err, user) {
                                 if (!user) {
                                     user = {
                                         id: message.user,
                                     };
                                 }
-                                user.name = convo.extractResponse('name');
-                                user.ip = convo.extractResponse('ip');
-                                user.mac = convo.extractResponse('mac');
-                                controller.storage.users.save(user, function (err, id) {
-                                    bot.reply(message, 'Printer Name :' + user.name);
-                                    bot.reply(message, 'Printer IP :' + user.ip);
-                                    bot.reply(message, 'MAC :' + user.mac);
-
-
-                                    bot.startConversation(message, function (err, convo) {
-                                        if (!err) {
-                                            convo.say('If you have issue with any other printers , type "printer" else we will work with printer team for the issue reported!');
-                                        }
-                                    });
+                                user.name = convo.extractResponse('nickname');
+                                controller.storage.users.save(user, function(err, id) {
+                                    bot.reply(message, 'Got it. I will call you ' + user.name + ' from now on.');
                                 });
                             });
+
+
+
                         } else {
                             // this happens if the conversation ended prematurely for some reason
                             bot.reply(message, 'OK, nevermind!');
                         }
                     });
+                }
+            });
+        }
+    });
+});
+
+controller.hears(['shutdown'], 'message_received', function(bot, message) {
+
+    bot.startConversation(message, function(err, convo) {
+
+        convo.ask('Are you sure you want me to shutdown?', [
+            {
+                pattern: bot.utterances.yes,
+                callback: function(response, convo) {
+                    convo.say('Bye!');
                     convo.next();
+                    setTimeout(function() {
+                        process.exit();
+                    }, 3000);
                 }
             },
-            {
-                pattern: bot.utterances.no,
-                default: true,
-                callback: function (response, convo) {
-                    convo.say('*Ok , Bye!*');
-                    convo.next();
-                }
+        {
+            pattern: bot.utterances.no,
+            default: true,
+            callback: function(response, convo) {
+                convo.say('*Phew!*');
+                convo.next();
             }
+        }
         ]);
     });
 });
 
 
-
-controller.hears(['hello', 'hi'], 'direct_message,direct_mention,mention', function (bot, message) {
-
-    bot.api.users.info({ user: message.user }, function (err, response) {
-        if (err) {
-            bot.say("ERROR :(");
-        }
-        else {
-            user = response["user"].real_name;
-            // emailid = response["user"].profile.email;
-            bot.reply(message,
-                {
-                    // text: 'Hello ' + user +" "+ emailid
-                    text: 'Hello ' + user
-                }
-            );
-        }
-    });
-
-});
-
-controller.hears(['uptime', 'identify yourself', 'who are you', 'what is your name'],
-    'direct_message,direct_mention,mention', function (bot, message) {
+controller.hears(['uptime', 'identify yourself', 'who are you', 'what is your name'], 'message_received',
+    function(bot, message) {
 
         var hostname = os.hostname();
         var uptime = formatUptime(process.uptime());
 
         bot.reply(message,
-            ':robot_face: I am a bot named <@' + bot.identity.name +
-            '>. I have been running for ' + uptime + ' on ' + hostname + '.');
-
+            ':|] I am a bot. I have been running for ' + uptime + ' on ' + hostname + '.');
     });
 
-controller.hears(['add_dc'], 'direct_message,direct_mention,mention', function (bot, message) {
 
-    bot.api.users.info({ user: message.user }, function (err, response) {
-        if (err) {
-            bot.say("ERROR :(");
-        }
-        else {
-            var user = response["user"].profile.display_name;
-            var fsNew = require('fs');
-            var AdminTxt = fsNew.readFileSync("Admin.txt").toString('utf-8');
-            var res1 = AdminTxt.match(user)
-            if (res1 == null) {
-                text = " You need admin role to Run this command  !!! ";
-                bot.reply(message, { "text": "```" + text + "```" });
-                Flag = false
-            }
-            else {
 
-                var inp = message.text;
-                var Flag = true;
-                var ValFlag = true;
-                var warnmsg = "";
-                res = inp.split(' ')
-                var re = /^[1-9][0-9]{3}$/
-                if (res[1].search(re) !== 0) {
-                    warnmsg = warnmsg + "Maybe you want to re check the entered DC Number : " + res[1] + "\n";
-                    ValFlag = false
-                }
+controller.on('message_received', function(bot, message) {
+    bot.reply(message, 'Try: `what is my name` or `structured` or `call me captain`');
+    return false;
+});
 
-                var re2 = /us|cl|br|mx|cn|cr|jp|uk|ca|ni|hn|gt|ar/i
-                if (res[2].search(re2) !== 0) {
-                    warnmsg = warnmsg + 'I have not heard of the country : ' + res[2] + "\n";
-                    ValFlag = false
-                }
-                if (ValFlag) {
-                    var d = new Date();
-                    var log_ts = d.toJSON();
-                    CC = res[2].toUpperCase();
-                    det = res[1] + CC
-                    fsNew.exists("dcList.txt", function (exists) {
-                        if (exists) {
-                            var fileTxt = fsNew.readFileSync("dcList.txt").toString('utf-8');
-                            var result = fileTxt.match(det)
-                            if (result != null) {
-                                bot.reply(message, 'DC/CC Already Present in the List : ' + res[1] + " " + CC + "\n");
-                                Flag = false
-                            }
-                            if (Flag) {
-                                addDc("\n" + det + "\n");
-                                bot.reply(message, "DC Added Successfully : " + res[1] + " " + CC);
-                                writeLog(log_ts + "|" + user + "| Added the DC : " + res[1] + " " + CC + "\n");
-                            }
-                        } else {
-                            addDc(det + "\n");
-                            bot.reply(message, "DC Added Successfully : " + res[1] + " " + CC);
-                        }
-                    });
-                }
-                else {
-                    bot.reply(message, { "text": "```" + warnmsg + "\nPlease Re-Enter the Values !!!```" });
-                }
-            }
+controller.hears(['tags'], 'message_received', function (bot, message) {
+    controller.api.tags.get_all(function (tags) {
+        for (var i = 0; i < tags.data.length; i++) {
+            bot.reply(message, tags.data[i].tag + ': ' + tags.data[i].description);
         }
     });
 });
 
-controller.hears(['del_dc'], 'direct_message,direct_mention,mention', function (bot, message) {
+controller.hears(['send tagged message'], 'message_received', function (bot, message) {
+    var taggedMessage = {
+        "text": "Hello Botkit !",
+        "tag": "RESERVATION_UPDATE"
+    };
+    bot.reply(message, taggedMessage);
+});
 
-    bot.api.users.info({ user: message.user }, function (err, response) {
+controller.hears(['send messaging type'], 'message_received', function (bot, message) {
+    var taggedMessage = {
+        "text": "Hello Botkit !",
+        "messaging_type": "UPDATE"
+    };
+    bot.reply(message, taggedMessage);
+});
+
+controller.hears(['insights'], 'message_received', function (bot, message) {
+    controller.api.insights.get_insights(['page_messages_active_threads_unique', 'page_messages_blocked_conversations_unique'], null, null, function (err, body) {
         if (err) {
-            bot.say("ERROR :(");
-        }
-        else {
-            user = response["user"].profile.display_name;
-            var fsNew1 = require('fs');
-            var AdminTxt = fsNew1.readFileSync("Admin.txt").toString('utf-8');
-            var res2 = AdminTxt.match(user)
-            if (res2 == null) {
-                text = " You need admin role to Run this command  !!!"
-                bot.reply(message, { "text": "```" + text + "```" });
-                Flag = false
-            }
-            else {
-
-                var inp = message.text;
-                var warnmsg = "";
-                var ValFlag1 = true;
-                var Flag1 = true;
-                res = inp.split(' ')
-                var re = /^[1-9][0-9]{3}$/
-                if (res[1].search(re) !== 0) {
-                    warnmsg = warnmsg + "Maybe you want to re check the entered DC Number : " + res[1] + "\n";
-                    ValFlag1 = false
-                }
-                var re2 = /us|cl|br|mx|cn|cr|jp|uk|ca|ni|hn|gt|ar/i
-                if (res[2].search(re2) !== 0) {
-                    warnmsg = warnmsg + 'I have not heard of the country : ' + res[2] + "\n";
-                    ValFlag1 = false
-                }
-                if (ValFlag1) {
-                    var d = new Date();
-                    var log_ts = d.toJSON();
-                    CC = res[2].toUpperCase();
-                    det = res[1] + CC
-
-                    fsNew1.exists("dcList.txt", function (exists) {
-                        if (exists) {
-                            var data = fsNew1.readFileSync('dcList.txt', 'utf-8');
-                            var result = data.match(det)
-                            if (result == null) {
-                                bot.reply(message, 'DC/CC Not Present in the List : ' + res[1] + " " + CC + "\n");
-                                Flag1 = false
-                            }
-                            if (Flag1) {
-                                var newValue = data.replace((det), '');
-                                var finalvalue = newValue.replace(/(^[ \t]*\n)/gm, "")
-                                fsNew1.writeFileSync('dcList.txt', finalvalue, 'utf-8');
-                                bot.reply(message, "DC Removed Successfully : " + res[1] + " " + CC);
-                                writeLog(log_ts + "|" + user + "| Removed the DC : " + res[1] + " " + CC + "\n");
-                            }
-                        } else {
-                            bot.reply(message, "Input File Not Present");
-                        }
-                    });
-                }
-                else {
-                    bot.reply(message, { "text": "```" + warnmsg + "\nPlease Re-Enter the Values !!!```" });
-                }
-            }
+            bot.reply(message, 'Insights error');
+        } else {
+            bot.reply(message, JSON.stringify(body.data));
         }
     });
 });
@@ -612,18 +535,4 @@ function formatUptime(uptime) {
 
     uptime = uptime + ' ' + unit;
     return uptime;
-}
-
-function sleep(milliseconds) {
-    var start = new Date().getTime();
-    for (var i = 0; i < 1e7; i++) {
-        if ((new Date().getTime() - start) > milliseconds) {
-            break;
-        }
-    }
-}
-
-function printer(response) {
-
-    return response;
 }
