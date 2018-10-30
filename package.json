@@ -5,6 +5,27 @@
     "private": true,
     "license": "MIT",
     "author": "Microsoft",
+    "dependencies": {
+"jfs": "latest",
+"mustache": "latest",
+"ware": "latest",
+"clone": "latest",
+"request": "latest",
+"promise": "latest",
+"md5": "latest",
+"botkit-studio-sdk": "latest",
+"express": "latest",
+"body-parser": "latest",
+"twilio": "latest",
+"botbuilder": "latest",
+"node-xmpp-client": "latest",
+"ws": "latest",
+"requestretry": "latest",
+"ssh-exec": "latest",
+"shelljs": "latest",
+"https-proxy-agent": "latest",
+"back": "latest"
+},
     "scripts": {
         "start": "node index.js"
     }
